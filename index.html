@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swiggy Tracking: Goal, Progress and Learnings</title>
+<style>
+  :root { --fg:#1d1d1f; --muted:#6e6e73; --line:#d2d2d7; --bg:#fff; --accent:#fc8019; --code:#f5f5f7; --ok:#1e8e3e; --bad:#d93025; --warn:#b06000; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --fg:#f5f5f7; --muted:#a1a1a6; --line:#3a3a3c; --bg:#1c1c1e; --accent:#ff9f4a; --code:#2c2c2e; --ok:#34c759; --bad:#ff6961; --warn:#ffb340; }
+  }
+  :root[data-theme="dark"] { --fg:#f5f5f7; --muted:#a1a1a6; --line:#3a3a3c; --bg:#1c1c1e; --accent:#ff9f4a; --code:#2c2c2e; --ok:#34c759; --bad:#ff6961; --warn:#ffb340; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:880px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  h2 { font-size:20px; margin:36px 0 10px; border-bottom:1px solid var(--line); padding-bottom:6px; }
+  h3 { font-size:16px; margin:22px 0 6px; }
+  p.meta { color:var(--muted); margin:0 0 16px; }
+  code, pre { background:var(--code); border-radius:6px; font-family:ui-monospace,Consolas,monospace; font-size:14px; }
+  code { padding:1px 5px; word-break:break-word; }
+  pre { padding:12px; overflow-x:auto; white-space:pre-wrap; }
+  table { width:100%; border-collapse:collapse; margin:8px 0 12px; font-size:15px; }
+  th, td { text-align:left; vertical-align:top; padding:8px 10px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:600; }
+  .ok { color:var(--ok); font-weight:600; }
+  .bad { color:var(--bad); font-weight:600; }
+  .warn { color:var(--warn); font-weight:600; }
+  .note { border-left:3px solid var(--accent); padding:4px 12px; margin:12px 0; color:var(--muted); }
+  ul, ol { padding-left:22px; }
+  li { margin:4px 0; }
+  nav ul { columns:2; list-style:none; padding-left:0; }
+  nav a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+
+<h1>Swiggy Tracking: Goal, Progress and Learnings</h1>
+<p class="meta">Last updated 2026-10-27. Source of truth for the project: this document. Project folder: <code>swiggyResearch</code>.</p>
+
+<nav>
+<ul>
+  <li><a href="#goal">1. Goal</a></li>
+  <li><a href="#status">2. Status at a glance</a></li>
+  <li><a href="#pipeline">3. How the pipeline works</a></li>
+  <li><a href="#data">4. What the Swiggy data looks like</a></li>
+  <li><a href="#parser">5. Parser decisions</a></li>
+  <li><a href="#db">6. Database</a></li>
+  <li><a href="#capture">7. Capture decisions (browser)</a></li>
+  <li><a href="#chrome">8. Learnings: Claude in Chrome</a></li>
+  <li><a href="#viewer">9. Viewer</a></li>
+  <li><a href="#list">10. Restaurant list (27,418 URLs)</a></li>
+  <li><a href="#issues">11. Issues found and how they were fixed</a></li>
+  <li><a href="#files">12. Files</a></li>
+  <li><a href="#open">13. Open items</a></li>
+  <li><a href="#corrections">14. Corrections to earlier notes</a></li>
+</ul>
+</nav>
+
+<h2 id="goal">1. Goal</h2>
+<p>Collect restaurants, outlets, menu dishes and ratings from Swiggy delivery pages and store them in a SQLite database.</p>
+<ul>
+  <li>Restaurant: name, city, cuisines, cost for two, overall rating and rating count.</li>
+  <li>Outlet: name, area, full address and FSSAI license number. One brand can have several outlets; each Swiggy restaurant ID is one outlet.</li>
+  <li>Every dish on the full menu: category, veg flag, price, description.</li>
+  <li>Dish rating (stars) and number of ratings, for dishes that have them. Many dishes have none.</li>
+  <li>Deterministic code does the extraction. LLMs are used only for setup and checks.</li>
+</ul>
+<p>Scope so far: every Hyderabad delivery restaurant URL found in Swiggy's public sitemap (27,418). Only a few have been mined.</p>
+
+<h2 id="status">2. Status at a glance</h2>
+<table>
+  <tr><th>Piece</th><th>Status</th></tr>
+  <tr><td>Menu data source</td><td><span class="ok">Found.</span> The <code>/dapi/menu/pl</code> JSON response contains the full menu, prices, ratings, descriptions, restaurant info, address and license.</td></tr>
+  <tr><td>Menu completeness</td><td><span class="ok">Matches.</span> Sum of section counts equals parsed items for every restaurant mined so far.</td></tr>
+  <tr><td>Capture and parse</td><td><span class="ok">Working.</span> Mined end to end from the viewer (capture, then parse). Browser-side diagnostics are non-fatal.</td></tr>
+  <tr><td>Database</td><td><span class="ok">11 restaurants, 11 outlets, 1,627 dishes, 1,171 dish ratings</span>, all outlets have a license number.</td></tr>
+  <tr><td>View</td><td><span class="ok"><code>dish_ratings_named</code></span> adds dish, restaurant and outlet names to <code>dish_ratings</code>.</td></tr>
+  <tr><td>Viewer</td><td><span class="ok">Working.</span> All, Done and Not done filters. Mine button runs one restaurant.</td></tr>
+  <tr><td>Outlet switcher</td><td><span class="bad">Not done.</span> Swiggy marks restaurants as <code>multiOutlet</code>; only the URL's outlet is captured.</td></tr>
+  <tr><td>Address and license in the view</td><td><span class="warn">Stored in tables, not yet in the view.</span></td></tr>
+</table>
+
+<h2 id="pipeline">3. How the pipeline works</h2>
+<ol>
+  <li><strong>List</strong>: <code>hyderabad_restaurants.txt</code> holds one URL per restaurant (from the sitemap, section 10).</li>
+  <li><strong>Capture</strong> (<code>capture.js</code>): opens one URL in a visible Chrome, clicks <em>View full menu</em>, saves the menu API response and some diagnostics to <code>snapshots\rest&lt;id&gt;\&lt;timestamp&gt;\</code>.</li>
+  <li><strong>Parse</strong> (<code>parse.js</code>, <code>lib/menu-api.js</code>): reads the saved menu API JSON and writes restaurant, outlet, dishes and ratings to <code>swiggy.db</code>.</li>
+  <li><strong>View</strong>: <code>dish_ratings_named</code> in the DB, or the local viewer.</li>
+</ol>
+<p>The capture step never writes to the DB. Parsing reads only saved files, so it can be re-run without touching Swiggy again. That split is the most useful design decision so far.</p>
+<p>The older <code>mine.js</code> (DOM-based, writes straight to the DB) is still present but no longer used by the viewer. Its failure path writes placeholder rows, so it is kept only for reference.</p>
+
+<h2 id="data">4. What the Swiggy data looks like</h2>
+<h3>Where the menu comes from</h3>
+<p>The menu is not in the first page load. Clicking <em>View full menu</em> requests <code>https://www.swiggy.com/dapi/menu/pl</code>. The response is 230 KB to 430 KB and holds everything needed in one response. There was no pagination in any response seen so far (<code>firstOffsetRequest: true</code> is only a marker).</p>
+<h3>Fields used</h3>
+<table>
+  <tr><th>Data</th><th>Where in the response</th></tr>
+  <tr><td>Restaurant name, city, cost for two, cuisines, average rating, rating count</td><td><code>Restaurant.info</code>: <code>name</code>, <code>city</code>, <code>costForTwo</code> (paise), <code>cuisines</code>, <code>avgRating</code>, <code>totalRatingsString</code></td></tr>
+  <tr><td>Outlet name, area, address</td><td><code>RestaurantAddress</code>: <code>name</code>, <code>area</code>, <code>completeAddress</code></td></tr>
+  <tr><td>License number</td><td><code>RestaurantLicenseInfo.text</code>: "License No. ..."</td></tr>
+  <tr><td>Dish sections</td><td><code>ItemCategory</code> cards, and sub-categories inside <code>NestedItemCategory</code>, under <code>groupedCard.cardGroupMap.REGULAR</code></td></tr>
+  <tr><td>Dish name, description, veg flag, price</td><td><code>itemCards[].card.info</code>: <code>name</code>, <code>description</code>, <code>itemAttribute.vegClassifier</code> (VEG / NONVEG), <code>price</code></td></tr>
+  <tr><td>Dish rating</td><td><code>info.ratings.aggregatedRating</code>: <code>rating</code> (string), <code>ratingCountV2</code>. Missing or <code>"--"</code> means no rating.</td></tr>
+</table>
+<h3>Things that surprised us</h3>
+<ul>
+  <li><strong>Prices are in paise.</strong> 45800 means Rs 458. Cost for two is also in paise.</li>
+  <li><strong>Some dishes have no top-level price.</strong> Their price sits in <code>variantsV2.pricingModels</code>; we take the lowest.</li>
+  <li><strong>Ratings in the response are not always for this restaurant.</strong> A "similar restaurants" grid carries ratings for other outlets. Only the dish <code>info</code> objects are used.</li>
+  <li><strong>Restaurants with no ratings yet</strong> show <code>--</code> and no average. 0 rated dishes is correct for those.</li>
+  <li><strong>Same brand, different outlets</strong>: three outlets are all named "Pista House" in the API. Each has its own area, address and license. Pista House Bakery is a separate brand name.</li>
+  <li><strong>Shared address</strong>: Pista House (Toli Chowki) and Pista House Bakery list the same address on Swiggy's own page. Licenses and dishes differ, so they are kept as separate outlets.</li>
+</ul>
+<h3>Markup changes</h3>
+<p>The DOM dish card used to carry an <code>aria-label</code> with "Costs: N rupees". It is now a paragraph with the same text, and each card has <code>data-testid="normal-dish-item"</code>. <code>capture.js</code> accepts both. This change was the cause of the earlier DOM timeouts (section 11).</p>
+
+<h2 id="parser">5. Parser decisions</h2>
+<table>
+  <tr><th>Decision</th><th>Why</th></tr>
+  <tr><td>Use the menu API as the source of truth. The DOM is diagnostic only.</td><td>The API has every dish in one response, with exact ratings and descriptions. The DOM depends on rendering and on markup that changes.</td></tr>
+  <tr><td>Store prices in rupees (paise divided by 100, rounded).</td><td>Matches what the page shows ("Costs: 458 rupees").</td></tr>
+  <tr><td>Items with variants take the lowest variant price.</td><td>The page shows a single price for these. Example: Murgh Musallam is stored as 664 (Half), not 825 (Full). Confirm this is the rule you want.</td></tr>
+  <tr><td>Category = the section title. Nested sub-categories are flattened to their own section.</td><td>Matches how the page groups dishes. Section titles have whitespace collapsed.</td></tr>
+  <tr><td>Duplicate (category, name) pairs: keep the first, report the rest in the run note.</td><td>The DB key is (outlet, category, name). A silent overwrite would lose data.</td></tr>
+  <tr><td>Outlet name from <code>RestaurantAddress.name</code>, falling back to the restaurant name.</td><td>Outlet name can differ from the brand name (for example "Pista House Bakery"). This was a bug until it was fixed.</td></tr>
+  <tr><td>Address from <code>completeAddress</code>; license number from <code>RestaurantLicenseInfo</code>.</td><td>Address is the best human key. License is a stable government ID per outlet, so it is the most reliable way to tell outlets apart.</td></tr>
+  <tr><td>Ratings: missing means null, not zero.</td><td>A dish with no rating is different from a dish rated 0.</td></tr>
+  <tr><td>Rating count "1.8K+" is stored as 1800 (approximate). The original text is kept too.</td><td>The API only gives a rounded count for large numbers.</td></tr>
+  <tr><td>Multiple menu responses in one snapshot: use the one with the most items.</td><td>A snapshot can contain error bodies or other API responses.</td></tr>
+</table>
+<h3>Success conditions</h3>
+<ul>
+  <li><strong>Done</strong>: the latest parse run for the URL saved at least one dish. The viewer uses this rule.</li>
+  <li><strong>Not done</strong>: no dishes saved yet. If the last Mine failed, the reason shows on the row.</li>
+  <li>Earlier we used a stricter rule (count must match the sum of section counts). That is still recorded per run (<code>dishes_expected</code>, <code>status</code>), but it no longer decides the viewer status, at your request.</li>
+  <li>Missing ratings is not a failure. The browser (DOM) steps are logged, and never decide the status.</li>
+</ul>
+
+<h2 id="db">6. Database</h2>
+<p>File: <code>swiggy.db</code> (SQLite, WAL mode). Schema is created by <code>lib/db.js</code> every time it opens. Tables:</p>
+<table>
+  <tr><th>Table</th><th>One row per</th><th>Notes</th></tr>
+  <tr><td><code>restaurants</code></td><td>Swiggy restaurant ID (one outlet each)</td><td>Name, city, cuisines, cost for two, rating, rating count</td></tr>
+  <tr><td><code>outlets</code></td><td>Outlet (one per restaurant ID here)</td><td><code>outlet_name</code>, <code>area</code>, <code>address</code>, <code>license_no</code> (added later)</td></tr>
+  <tr><td><code>dishes</code></td><td>Dish on an outlet's menu</td><td>Unique on (outlet, category, name). Veg flag, price, description</td></tr>
+  <tr><td><code>dish_ratings</code></td><td>Dish, per scrape run</td><td>Stars and rating count at that time. Keeps history.</td></tr>
+  <tr><td><code>scrape_runs</code></td><td>Parse run</td><td>Status, dishes found, dishes expected, note. Used for viewer status.</td></tr>
+  <tr><td><code>dish_ratings_named</code> (view)</td><td>Same as <code>dish_ratings</code></td><td>Adds <code>dish_name</code>, <code>restaurant_name</code>, <code>outlet_name</code>.</td></tr>
+</table>
+<h3>Migrations and backfills</h3>
+<ul>
+  <li><code>outlets.license_no</code> is added by a migration in <code>openDb</code> when missing. Existing outlets were backfilled from the snapshot files (12 updates, 0 skipped at the time). Every outlet now has a license.</li>
+  <li>The view is dropped and recreated on each open, so its definition always matches the code.</li>
+  <li>Re-parsing a snapshot upserts outlets and dishes, updates the rating row for the same timestamp, and adds a run row. Backfills were done with a targeted UPDATE to avoid duplicate run rows.</li>
+</ul>
+<h3>Known data quirks</h3>
+<ul>
+  <li><code>restaurants.name</code> was briefly the URL for restaurants whose early mine attempts failed. Successful parses overwrite it.</li>
+  <li>Placeholder outlets with <code>failed@url</code> addresses (from the old <code>mine.js</code> failure path) were deleted.</li>
+  <li>Old failed runs remain in <code>scrape_runs</code> as history.</li>
+</ul>
+
+<h2 id="capture">7. Capture decisions (browser)</h2>
+<table>
+  <tr><th>Decision</th><th>Why</th></tr>
+  <tr><td>Visible browser, not headless.</td><td>Headless runs were refused by Swiggy with an HTTP error on the navigation. A visible window worked.</td></tr>
+  <tr><td>Persistent profile in <code>browser-profile\</code>, not your personal Chrome.</td><td>Keeps cookies and location between runs without touching your own profile or sign-ins. Override with the <code>PROFILE</code> environment variable.</td></tr>
+  <tr><td>Wait for the restaurant header, then up to 15 s for the <em>View full menu</em> button to be visible, then click.</td><td>A fixed sleep made the button check run before the button rendered.</td></tr>
+  <tr><td>Wait for dish cards to be <em>attached</em> (in the DOM), not <em>visible</em>.</td><td>A late or off-screen render should not end the scroll. The API response is what the parser uses.</td></tr>
+  <tr><td>Card selector: <code>[data-testid="normal-dish-item"]</code>, with the old <code>aria-label</code> as fallback.</td><td>The label moved into the text of a paragraph (section 4).</td></tr>
+  <tr><td>DOM result recorded as <code>dom_status</code> in <code>meta.json</code>: <code>cards_seen</code>, <code>no_cards</code>, <code>no_button</code>, <code>error</code>.</td><td>Diagnostic only. It explains a failure but never decides success.</td></tr>
+  <tr><td>HTTP 202 on navigation is logged as a note, not an error.</td><td>The page still loaded and the menu API returned 200.</td></tr>
+  <tr><td>Only HTTP 400 and above stops a capture.</td><td>Matches the observed behaviour of the site.</td></tr>
+  <tr><td>One browser context for the whole run; one page per URL.</td><td>Keeps the profile shared while avoiding leftover tabs.</td></tr>
+</table>
+<h3>Rate and blocking</h3>
+<p class="note">Repeated requests to Swiggy in a short time start failing with <code>ERR_HTTP_RESPONSE_CODE_FAILURE</code>, and sometimes HTTP 403. Pause between runs, and do not loop over many restaurants at once. The viewer runs one job at a time for this reason.</p>
+
+<h2 id="chrome">8. Learnings: Claude in Chrome</h2>
+<h3>How the tools behaved</h3>
+<ul>
+  <li><strong>Tabs</strong>: each session opened its own tab. Tab IDs from earlier sessions became invalid; re-run <code>tabs_context_mcp</code> with <code>createIfEmpty</code> when that happens.</li>
+  <li><strong>Reading pages</strong>: <code>read_page</code> gives a long accessibility tree with links and card text. <code>get_page_text</code> returned nothing on Swiggy's app-style pages. <code>javascript_tool</code> was the most useful: read the DOM, count elements, check attributes.</li>
+  <li><strong>Clicking</strong>: <code>find</code> returns a ref, and clicking that ref works better than coordinates.</li>
+  <li><strong>Screenshots</strong> are the best check for "does the page look right". They showed the menu rendering when the scripts said it wasn't.</li>
+  <li><strong>Downloads</strong>: the browser can save a file made in page JavaScript (Blob plus anchor click). It needs your approval first. Files land in Downloads and must be copied into the project.</li>
+  <li><strong>Writing to disk</strong> is not possible from the page. The sitemap download from the command line returned 403, so the browser is the only route to Swiggy's sitemap.</li>
+</ul>
+<h3>Lessons for using it</h3>
+<ul>
+  <li><strong>Test the exact selector the script uses, against the live page, before blaming timing.</strong> The timeouts were a selector change, not a rendering problem, and a simple read of the page missed it.</li>
+  <li><strong>Don't poll Swiggy repeatedly.</strong> A few quick retries were enough to get refused.</li>
+  <li><strong>Close the tabs you open.</strong> Leave the rest alone.</li>
+  <li><strong>Stop and ask</strong> after 2 or 3 failed tool calls, as the skill says.</li>
+</ul>
+
+<h2 id="viewer">9. Viewer</h2>
+<p>Run <code>npm run viewer</code>, then open <code>http://127.0.0.1:3000</code>. It listens on localhost only.</p>
+<ul>
+  <li><strong>Rows</strong>: every URL in the list. Green dot and "Done" when dishes are saved; grey "Not done" otherwise.</li>
+  <li><strong>Filters</strong>: All, Done, Not done. Search by name, area or ID.</li>
+  <li><strong>Mine</strong> (or <strong>Re-mine</strong>): runs <code>capture.js</code>, then <code>parse.js</code>, for that URL. One job at a time. Log panel shows progress.</li>
+  <li><strong>Security</strong>: the server only runs URLs that are in the list file.</li>
+</ul>
+<div class="note">The viewer server does not reload when its code changes. After any change to <code>viewer/server.js</code>, restart it. A stale server returns old fields, which caused the Done and Not done filters to show 0 restaurants. The page now computes Done from the dish count, so it works with either version.</div>
+
+<h2 id="list">10. Restaurant list (27,418 URLs)</h2>
+<ul>
+  <li><strong>Source</strong>: Swiggy's public sitemap index (<code>robots.txt</code> points to <code>sitemap.xml.gz</code>), which lists 40 gzipped sitemap files. Filtered to <code>/city/hyderabad/&lt;slug&gt;-rest&lt;id&gt;</code>.</li>
+  <li><strong>Result</strong>: 27,418 URLs, 27,418 distinct IDs, no duplicates. Both original test restaurants are included.</li>
+  <li><strong>Not included</strong>: Dineout (table booking) pages, which use <code>/restaurants/&lt;slug&gt;/dineout</code>.</li>
+  <li><strong>Caveats</strong>: a sitemap entry does not prove the restaurant is open or delivering. Multi-outlet brands may have one entry per outlet.</li>
+  <li><strong>File</strong>: <code>hyderabad_restaurants.txt</code> in the project (2.5 MB).</li>
+</ul>
+
+<h2 id="issues">11. Issues found and how they were fixed</h2>
+<table>
+  <tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr>
+  <tr><td>Capture did not click <em>View full menu</em></td><td>Button checked once after a fixed 3 s sleep, before it rendered.</td><td>Wait for the header, then for the button to be visible, then click.</td></tr>
+  <tr><td>Menu API captured but the run timed out and was logged as failed</td><td>The selector <code>[aria-label*="Costs:"]</code> no longer matched. The label moved into paragraph text.</td><td>Selector switched to <code>data-testid="normal-dish-item"</code>, with the old label as fallback. DOM result made non-fatal.</td></tr>
+  <tr><td>Placeholder restaurant rows with the URL as the name</td><td>The failure path of <code>mine.js</code> wrote placeholder restaurants and <code>failed@url</code> outlets.</td><td>Parse upserts overwrote the names. Placeholder outlets deleted. Viewer no longer uses <code>mine.js</code>.</td></tr>
+  <tr><td>Viewer showed "undefined" statuses, then 0 for Done and Not done</td><td>Server process started before a code change, so it returned old fields.</td><td>Restart the viewer. Page derives Done from the dish count.</td></tr>
+  <tr><td>Outlet name was always the brand name</td><td>Parser used the restaurant name, not <code>RestaurantAddress.name</code>.</td><td>Parser uses the outlet name, falling back to the restaurant name.</td></tr>
+  <tr><td>DB would not open in the VS Code SQLite extension</td><td>Suspected: WAL mode side files, and a project folder synced by OneDrive. Not confirmed; you reported it worked afterwards, which you put down to a memory issue.</td><td>No code change. Note this if it returns.</td></tr>
+  <tr><td>Test of a recent parse showed "0 with ratings"</td><td>Correct. The restaurant had dishes marked <code>--</code>. The two ratings found belonged to other outlets in a grid.</td><td>None needed. Recorded here so it isn't mistaken for a bug.</td></tr>
+</table>
+
+<h2 id="files">12. Files</h2>
+<table>
+  <tr><th>File</th><th>Purpose</th></tr>
+  <tr><td><code>capture.js</code></td><td>Opens one URL, clicks the menu, saves the API response and diagnostics.</td></tr>
+  <tr><td><code>parse.js</code></td><td>Parses saved snapshots into the DB. <code>npm run parse</code>.</td></tr>
+  <tr><td><code>lib/menu-api.js</code></td><td>Menu API parser: restaurant, outlet, license, dishes, ratings.</td></tr>
+  <tr><td><code>lib/db.js</code></td><td>Schema, migrations, view, saves one scrape in one transaction.</td></tr>
+  <tr><td><code>lib/extract.js</code></td><td>DOM extractor and shared helpers. Used by the old <code>mine.js</code>.</td></tr>
+  <tr><td><code>mine.js</code></td><td>Older DOM-based miner. Not used by the viewer.</td></tr>
+  <tr><td><code>viewer/server.js</code>, <code>viewer/index.html</code></td><td>Local viewer and mining job runner.</td></tr>
+  <tr><td><code>test/menu-api.test.js</code></td><td>Parser tests against real snapshots. <code>npm test</code>.</td></tr>
+  <tr><td><code>hyderabad_restaurants.txt</code></td><td>27,418 Hyderabad restaurant URLs.</td></tr>
+  <tr><td><code>ref.txt</code></td><td>The two original test URLs.</td></tr>
+  <tr><td><code>swiggy.db</code></td><td>The database.</td></tr>
+  <tr><td><code>snapshots\</code></td><td>Raw captures. Large, not in the repo.</td></tr>
+  <tr><td><code>browser-profile\</code></td><td>Browser profile used by capture. Not in the repo.</td></tr>
+</table>
+
+<h2 id="open">13. Open items</h2>
+<ul>
+  <li><strong>Outlet switcher</strong>: Swiggy marks these restaurants as multi-outlet. Find the other outlets from a brand's listing and capture each one.</li>
+  <li><strong>Brand grouping</strong>: each Swiggy ID is its own restaurant row. Group outlets under a brand, for example "Pista House", if that view is needed.</li>
+  <li><strong>View</strong>: add outlet address and license number to <code>dish_ratings_named</code>.</li>
+  <li><strong>Price rule</strong>: confirm the lowest-variant price rule for items with variants.</li>
+  <li><strong>Scale</strong>: mine the other restaurants in the list. Pace it, since repeated requests get blocked.</li>
+  <li><strong>Clean up</strong>: failed snapshot folders and failed run rows can be removed once no longer needed.</li>
+  <li><strong>Mine.js</strong>: retire or fix its failure path.</li>
+</ul>
+
+<h2 id="corrections">14. Corrections to earlier notes</h2>
+<ul>
+  <li>The launch arguments of <code>mine.js</code> and <code>capture.js</code> are the same. The earlier note that they differed was wrong.</li>
+  <li>HTTP 202 is not a block. The menu API returned 200 in the same runs.</li>
+  <li>The database was not empty: it held failed runs and placeholder rows, now cleaned up.</li>
+  <li>The earlier timeout diagnosis (visibility, then browser profile) was wrong. The cause was the selector, which was confirmed on the live page.</li>
+</ul>
+
+</main>
+</body>
+</html>
