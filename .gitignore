@@ -1,0 +1,8 @@
+node_modules/
+swiggy.db
+swiggy.db-wal
+swiggy.db-shm
+snapshots/
+browser-profile/
+hyderabad_restaurants.txt
+ref.txt

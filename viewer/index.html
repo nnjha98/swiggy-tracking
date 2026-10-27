@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hyderabad Restaurant Viewer</title>
+<style>
+  :root { --fg:#1d1d1f; --muted:#6e6e73; --line:#d2d2d7; --bg:#fff; --card:#f5f5f7; --done:#1e8e3e; --failed:#d93025; --accent:#fc8019; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --fg:#f5f5f7; --muted:#a1a1a6; --line:#3a3a3c; --bg:#1c1c1e; --card:#2c2c2e; --done:#34c759; --failed:#ff6961; --accent:#ff9f4a; }
+  }
+  :root[data-theme="dark"] { --fg:#f5f5f7; --muted:#a1a1a6; --line:#3a3a3c; --bg:#1c1c1e; --card:#2c2c2e; --done:#34c759; --failed:#ff6961; --accent:#ff9f4a; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .meta { color:var(--muted); margin:0 0 12px; }
+  .legend { display:flex; flex-wrap:wrap; gap:14px; font-size:13px; color:var(--muted); margin-bottom:14px; }
+  .legend span { display:inline-flex; align-items:center; gap:6px; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:12px; }
+  input[type=search] { flex:1 1 220px; padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); font:inherit; }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:8px; padding:7px 12px; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.on { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); }
+  .row { display:grid; grid-template-columns: 14px 1fr auto auto; gap:12px; align-items:center; padding:10px 8px; border-bottom:1px solid var(--line); }
+  .dot { width:12px; height:12px; border-radius:50%; background:var(--muted); }
+  .dot.done { background:var(--done); }
+  .name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .sub { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sub.err { color:var(--failed); }
+  .status { font-size:13px; white-space:nowrap; min-width:80px; text-align:right; font-weight:600; }
+  .status.done { color:var(--done); }
+  .status.not_done { color:var(--muted); font-weight:400; }
+  .panel { background:var(--card); border-radius:10px; padding:12px; margin:12px 0; }
+  .panel h2 { font-size:15px; margin:0 0 6px; }
+  pre { margin:0; max-height:220px; overflow:auto; font:12px/1.4 ui-monospace,Consolas,monospace; white-space:pre-wrap; }
+  .more { display:block; margin:14px auto 0; }
+  @media (max-width:560px) {
+    .row { grid-template-columns: 14px 1fr; }
+    .row .status, .row button { grid-column: 2; justify-self:start; }
+    .status { text-align:left; min-width:0; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Hyderabad Restaurant Viewer</h1>
+  <p class="meta" id="summary">Loading…</p>
+  <div class="legend">
+    <span><i class="dot done"></i> Done: dishes saved</span>
+    <span><i class="dot"></i> Not done</span>
+  </div>
+
+  <div class="bar">
+    <input type="search" id="q" placeholder="Search name, area or ID">
+    <button data-filter="all" class="on">All</button>
+    <button data-filter="done">Done</button>
+    <button data-filter="not_done">Not done</button>
+  </div>
+
+  <div class="panel" id="jobPanel" hidden>
+    <h2 id="jobTitle"></h2>
+    <pre id="jobLog"></pre>
+  </div>
+
+  <div id="list"></div>
+  <button class="more" id="more" hidden>Show more</button>
+</main>
+
+<script>
+(() => {
+  const PAGE = 200;
+  const LABEL = { done: 'Done', not_done: 'Not done' };
+  let all = [];
+  let filter = 'all';
+  let query = '';
+  let shown = PAGE;
+  let jobRunning = false;
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+
+  function filtered() {
+    const q = query.trim().toLowerCase();
+    return all.filter((r) => {
+      if (filter !== 'all' && r.status !== filter) return false;
+      if (!q) return true;
+      return r.name.toLowerCase().includes(q) || String(r.id).includes(q) || r.url.toLowerCase().includes(q);
+    });
+  }
+
+  function subLine(r) {
+    if (r.status === 'done') {
+      const when = (r.lastScrapedAt || '').slice(0, 16).replace('T', ' ');
+      return `<span class="sub">rest${r.id} · ${r.dishes} dishes · ${r.rated} rated · last ${esc(when)}</span>`;
+    }
+    if (r.reason) return `<span class="sub err">${esc(r.reason)}</span>`;
+    return `<span class="sub">rest${r.id}</span>`;
+  }
+
+  function render() {
+    const rows = filtered();
+    const done = all.filter((r) => r.status === 'done').length;
+    $('summary').textContent =
+      `${done} done · ${all.length - done} not done · ${all.length} in list · showing ${Math.min(shown, rows.length)} of ${rows.length}`;
+    $('list').innerHTML = rows.slice(0, shown).map((r) => `
+      <div class="row">
+        <span class="dot ${r.status === 'done' ? 'done' : ''}"></span>
+        <div style="min-width:0">
+          <div class="name" title="${esc(r.name)}">${esc(r.name)}</div>
+          ${subLine(r)}
+        </div>
+        <span class="status ${r.status}">${LABEL[r.status]}</span>
+        <button data-url="${esc(r.url)}" ${jobRunning ? 'disabled' : ''}>${r.status === 'done' ? 'Re-mine' : 'Mine'}</button>
+      </div>`).join('');
+    $('more').hidden = rows.length <= shown;
+  }
+
+  // Status comes from the dish count here, not from the server's status field,
+  // so the filters work even if the server is an older version.
+  async function loadList() {
+    const rows = await (await fetch('/api/list')).json();
+    all = rows.map((r) => ({
+      ...r,
+      status: (r.dishes || 0) > 0 ? 'done' : 'not_done',
+      rated: r.rated ?? 0,
+    }));
+    render();
+  }
+
+  async function pollJob() {
+    const job = await (await fetch('/api/job')).json();
+    const running = job.state === 'running';
+    const wasRunning = jobRunning;
+    jobRunning = running;
+
+    $('jobPanel').hidden = job.state === 'idle';
+    if (job.state !== 'idle') {
+      const label = { running: 'Mining', done: 'Done', failed: 'Failed' }[job.state];
+      const reason = job.state === 'failed' ? ` <span class="sub err">— ${esc(job.error)}</span>` : '';
+      $('jobTitle').innerHTML = `${label}: ${esc(job.url)}${reason}`;
+      $('jobLog').textContent = job.log.join('\n');
+      $('jobLog').scrollTop = $('jobLog').scrollHeight;
+    }
+    if (wasRunning !== running) {
+      render();
+      if (!running) await loadList();
+    }
+    if (running) setTimeout(pollJob, 2000);
+  }
+
+  async function mine(url) {
+    const res = await fetch('/api/mine', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const body = await res.json();
+    if (!res.ok) {
+      alert(body.error);
+      return;
+    }
+    jobRunning = true;
+    render();
+    pollJob();
+  }
+
+  $('list').addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-url]');
+    if (btn && !btn.disabled) mine(btn.dataset.url);
+  });
+  $('q').addEventListener('input', (e) => { query = e.target.value; shown = PAGE; render(); });
+  document.querySelectorAll('button[data-filter]').forEach((b) => b.addEventListener('click', () => {
+    filter = b.dataset.filter;
+    shown = PAGE;
+    document.querySelectorAll('button[data-filter]').forEach((x) => x.classList.toggle('on', x === b));
+    render();
+  }));
+  $('more').addEventListener('click', () => { shown += PAGE; render(); });
+
+  loadList().then(pollJob);
+})();
+</script>
+</body>
+</html>
