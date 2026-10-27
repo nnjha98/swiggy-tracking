@@ -15,6 +15,9 @@ Rendered page: https://nnjha98.github.io/swiggy-tracking/ (source: `index.html`)
 
 Setup: `npm install`. Capture needs Chrome at `C:\Program Files\Google\Chrome\Application\chrome.exe`.
 
-## Not in the repo
+## Data
 
-The database, snapshots, browser profile, and the restaurant URL list are data and are excluded (see `.gitignore`).
+- `swiggy.db`: the SQLite database (11 restaurants, 11 outlets, 1,627 dishes, 1,171 dish ratings at the time of push). Includes the FSSAI license number per outlet.
+- `hyderabad_restaurants.txt`: 27,418 Hyderabad restaurant URLs from Swiggy's public sitemap.
+
+Not in the repo: `snapshots/` (raw captures, large), `browser-profile/` (browser profile), and `node_modules/`. The tests in `test/` need the snapshot folders.
