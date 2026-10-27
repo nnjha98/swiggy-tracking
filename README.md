@@ -4,6 +4,18 @@ Goal, progress and learnings for the Swiggy Hyderabad restaurant, outlet, menu a
 
 Rendered page: https://nnjha98.github.io/swiggy-tracking/ (source: `index.html`)
 
+Cloudflare Pages mirror: https://swiggy-tracking.pages.dev/ (source: `public/index.html`)
+
+## Deploy to Cloudflare Pages
+
+Only `public/` is published, so the database and list are not served. Deploy from a folder that contains only `public/`:
+
+```
+npx wrangler pages deploy public --project-name swiggy-tracking --branch main
+```
+
+Run `npx wrangler login` first. Each deploy uploads the folder directly, so it does not redeploy on push.
+
 ## Code
 
 - `capture.js`: opens one restaurant URL in Chrome, clicks "View full menu", saves the menu API response to `snapshots/`.
